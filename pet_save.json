@@ -1,0 +1,13 @@
+{
+  "name": "Buddy",
+  "stats": {
+    "hunger": 76,
+    "happiness": 77,
+    "energy": 77,
+    "health": 86,
+    "age": 6,
+    "alive": true
+  },
+  "sleeping_ticks": 0,
+  "snacks": 6
+}
