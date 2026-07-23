@@ -45,7 +45,7 @@ class PetStats:
 
 # ── ASCII Art Frames ───────────────────────────────────────────────
 PET_FRAMES: Dict[str, List[str]] = {
-    # Happy / default
+    # Happy / default / content / bored
     "happy": [
         r"""
        /\___/\
@@ -64,6 +64,42 @@ PET_FRAMES: Dict[str, List[str]] = {
         |    |
        /|    |\
       / |    | \
+    """,
+    ],
+    "content": [
+        r"""
+       /\___/\
+      (  · ·  )
+      (  =w=  )
+       (______)
+        |    |
+    """,
+    ],
+    "bored": [
+        r"""
+       /\___/\
+      (  ¬_¬  )
+      (  ... )
+       (______)
+        |    |
+    """,
+    ],
+    "grumpy": [
+        r"""
+       /\___/\
+      (  >_<  )
+      (  ¬¬¬  )
+       (______)
+        |    |\
+    """,
+    ],
+    # Starving / hungry
+    "starving": [
+        r"""
+       /\___/\
+      (  @_@  )
+      (  > <  )
+       (______)
     """,
     ],
     # Hungry
@@ -117,6 +153,25 @@ PET_FRAMES: Dict[str, List[str]] = {
       / ☆  ☆   \
     """,
     ],
+    "hyper": [
+        r"""
+       /\___/\
+      (  ✧✧  )
+      (  =D= )
+       (______)
+        |    |
+       /☆   ☆\
+      ★  ☆☆  ★
+    """,
+        r"""
+       /\___/\  ☆
+      (  ✧✧  )
+      (  =D= ) ★
+       (______)
+       ★|    |☆
+       /  ☆☆  \
+    """,
+    ],
     # Sick
     "sick": [
         r"""
@@ -152,30 +207,74 @@ PET_FRAMES: Dict[str, List[str]] = {
 }
 
 
-def get_pet_mood(stats: PetStats, sleeping_ticks: int = 0) -> str:
-    """Determine the pet's mood based on stats."""
+def get_pet_mood(stats: PetStats, sleeping_ticks: int = 0, frame_idx: int = 0,
+                  prev_mood: str = "egg") -> str:
+    """Determine the pet's mood with hysteresis at boundaries.
+    Once in a mood, stats must overshoot the threshold by ~8 points to switch,
+    preventing rapid toggling at boundaries."""
+    # Stable jitter: drifts slowly, ±4 range
+    _seed = (stats.hunger * 31 + stats.happiness * 37 + stats.energy * 41
+             + stats.health * 43 + stats.age * 47 + frame_idx // 30)
+    jit = (_seed % 9) - 4
+    j = lambda v: v + jit
+
+    # Hysteresis: when leaving current mood, require stats to overshoot
+    # "soft" = wider threshold for leaving (harder to leave)
+    h = lambda v, margin=8: v - margin if prev_mood else v + margin
+
     if not stats.alive:
         return "dead"
     if sleeping_ticks > 0:
         return "sleepy"
-    if stats.health < 25:
+
+    # Each check: use normal threshold for entering, wider for leaving
+    def check(mood, threshold, cmp_lt=True):
+        """Returns True if mood should be active.
+        cmp_lt=True: mood triggers when stat drops below threshold.
+        cmp_lt=False: mood triggers when stat exceeds threshold."""
+        if cmp_lt:
+            # Enter when below threshold, leave when above threshold+hysteresis
+            if prev_mood == mood:
+                return threshold + 8  # leave only if well above
+            return threshold
+        else:
+            if prev_mood == mood:
+                return threshold - 8  # leave only if well below
+            return threshold
+
+    # Priority-ordered mood checks with hysteresis
+    if stats.health < (check("sick", j(25)) if prev_mood == "sick" else j(25)):
         return "sick"
-    if stats.hunger < 30:
+    if stats.hunger < (j(15) + 8 if prev_mood == "starving" else j(15)):
+        return "starving"
+    if stats.hunger < (j(35) + 8 if prev_mood == "hungry" else j(35)):
         return "hungry"
-    if stats.energy < 25:
+    if stats.energy < (j(20) + 8 if prev_mood == "sleepy" else j(20)):
+        # low energy sleepy (different from sleeping_ticks)
         return "sleepy"
-    if stats.happiness < 30:
+    if stats.happiness < (j(25) + 8 if prev_mood == "sad" else j(25)):
         return "sad"
-    if stats.age < 5:
+    if stats.happiness < (j(45) + 8 if prev_mood == "grumpy" else j(45)):
+        return "grumpy"
+    if stats.age < j(5):
         return "egg"
-    if stats.happiness > 80 and stats.energy > 60:
+
+    # Positive moods (trigger when stat exceeds threshold)
+    if stats.energy > (j(85) - 8 if prev_mood == "hyper" else j(85)) and stats.happiness > j(55):
+        return "hyper"
+    if stats.happiness > (j(75) - 8 if prev_mood == "playing" else j(75)) and stats.energy > j(55):
         return "playing"
+    if stats.hunger > (j(90) - 8 if prev_mood == "content" else j(90)) and stats.happiness > j(55):
+        return "content"
+    if stats.happiness < (j(55) + 8 if prev_mood == "bored" else j(55)):
+        return "bored"
     return "happy"
 
 
-def render_pet(stats: PetStats, frame_idx: int, sleeping_ticks: int = 0) -> str:
+def render_pet(stats: PetStats, frame_idx: int, sleeping_ticks: int = 0,
+               prev_mood: str = "egg") -> str:
     """Render the pet in its current mood."""
-    mood = get_pet_mood(stats, sleeping_ticks)
+    mood = get_pet_mood(stats, sleeping_ticks, frame_idx, prev_mood)
     frames = PET_FRAMES.get(mood, PET_FRAMES["happy"])
     return frames[frame_idx % len(frames)]
 
@@ -281,6 +380,7 @@ class Pet:
         self.events = EventLog()
         self.sleeping_ticks = 0   # remaining ticks to show sleep animation
         self.snacks = 0           # treat inventory
+        self.prev_mood = "egg"    # tracks last mood for hysteresis
 
     def _wake_if_sleeping(self) -> None:
         """Wake the pet if currently sleeping."""
@@ -293,9 +393,23 @@ class Pet:
             self.events.add(f"{self.name} has passed away... 💀", CP_RED)
             return
         self._wake_if_sleeping()
+        old_hunger = self.stats.hunger
         amount = random.randint(15, 30)
         self.stats.hunger = min(100, self.stats.hunger + amount)
         self.stats.happiness = min(100, self.stats.happiness + 5)
+
+        # Overfeeding: the fuller the pet, the higher the risk of a stomach ache
+        if old_hunger > 70:
+            overfeed_chance = (old_hunger - 70) / 30 * 0.85  # 0% at 70, ~85% at 100
+            if random.random() < overfeed_chance:
+                dmg = random.randint(3, 10)
+                self.stats.health = max(0, self.stats.health - dmg)
+                self.events.add(
+                    f"🍽️  You fed {self.name}! (+{amount} hunger) — but they ate too much! (-{dmg} health 🤢)",
+                    CP_YELLOW,
+                )
+                return
+
         self.events.add(f"🍽️  You fed {self.name}! (+{amount} hunger)", CP_GREEN)
 
     def play(self) -> None:
@@ -448,16 +562,21 @@ def delete_save() -> None:
 
 
 # ── Curses Drawing ─────────────────────────────────────────────────
-def draw_pet(win, stats: PetStats, frame_idx: int, y: int, x: int, sleeping_ticks: int = 0) -> int:
+def draw_pet(win, stats: PetStats, frame_idx: int, y: int, x: int, sleeping_ticks: int = 0,
+             prev_mood: str = "egg") -> int:
     """Draw the pet ASCII art. Returns number of lines drawn."""
-    mood = get_pet_mood(stats, sleeping_ticks)
+    mood = get_pet_mood(stats, sleeping_ticks, frame_idx, prev_mood)
     mood_colors = {
-        "dead": CP_RED, "sick": CP_RED, "hungry": CP_YELLOW, "sleepy": CP_CYAN,
-        "sad": CP_YELLOW, "playing": CP_MAGENTA, "happy": CP_GREEN, "egg": CP_CYAN,
+        "dead": CP_RED, "sick": CP_RED, "starving": CP_RED,
+        "hungry": CP_YELLOW, "grumpy": CP_YELLOW, "sad": CP_YELLOW,
+        "sleepy": CP_CYAN, "egg": CP_CYAN,
+        "bored": CP_GRAY, "content": CP_GREEN_BOLD,
+        "playing": CP_MAGENTA, "hyper": CP_MAGENTA_BOLD,
+        "happy": CP_GREEN,
     }
     mood_cp = mood_colors.get(mood, CP_GREEN)
     attr = curses.color_pair(mood_cp)
-    if mood != "dead":
+    if mood != "dead" and mood != "bored":
         attr |= curses.A_BOLD
 
     art = render_pet(stats, frame_idx)
@@ -523,14 +642,19 @@ def draw_all(stdscr, pet: Pet, highlight_btn: int = -1) -> dict:
 
     # Pet art — track clickable zone
     pet_y, pet_x = y, 7
-    art_lines = draw_pet(stdscr, pet.stats, pet.frame_idx, pet_y, pet_x, pet.sleeping_ticks)
+    art_lines = draw_pet(stdscr, pet.stats, pet.frame_idx, pet_y, pet_x, pet.sleeping_ticks, pet.prev_mood)
     y += art_lines
 
     # Name & mood
-    mood = get_pet_mood(pet.stats, pet.sleeping_ticks)
+    mood = get_pet_mood(pet.stats, pet.sleeping_ticks, pet.frame_idx, pet.prev_mood)
+    pet.prev_mood = mood
     mood_colors = {
-        "dead": CP_RED, "sick": CP_RED, "hungry": CP_YELLOW, "sleepy": CP_CYAN,
-        "sad": CP_YELLOW, "playing": CP_MAGENTA, "happy": CP_GREEN, "egg": CP_CYAN,
+        "dead": CP_RED, "sick": CP_RED, "starving": CP_RED,
+        "hungry": CP_YELLOW, "grumpy": CP_YELLOW, "sad": CP_YELLOW,
+        "sleepy": CP_CYAN, "egg": CP_CYAN,
+        "bored": CP_GRAY, "content": CP_GREEN_BOLD,
+        "playing": CP_MAGENTA, "hyper": CP_MAGENTA_BOLD,
+        "happy": CP_GREEN,
     }
     mood_cp = mood_colors.get(mood, CP_GREEN)
     mood_attr = curses.color_pair(mood_cp) | curses.A_BOLD
