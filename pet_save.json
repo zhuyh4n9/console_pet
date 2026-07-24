@@ -1,13 +1,20 @@
 {
+  "coins": 73,
   "name": "Buddy",
+  "owned_decorations": [
+    "bow",
+    "scarf"
+  ],
+  "sleeping_ticks": 2,
+  "snacks": 1,
   "stats": {
-    "hunger": 76,
-    "happiness": 77,
-    "energy": 77,
-    "health": 86,
-    "age": 6,
-    "alive": true
+    "age": 604,
+    "alive": true,
+    "energy": 24,
+    "happiness": 100,
+    "health": 100,
+    "hunger": 78
   },
-  "sleeping_ticks": 0,
-  "snacks": 6
+  "working_ticks": 0,
+  "worn_decoration": "bow"
 }
